@@ -3,7 +3,6 @@
 #WIREGUARD_PORT=45162
 WIREGUARD_IF_NAME=wgvpn0
 WIREGUARD_PORT=51820
-WIREGUARD_MIDDLE_MAN_IP=178.62.29.162
 WIREGUARD_START_IP=192.168.5.0/24
 
 CIDR=$(echo ${WIREGUARD_START_IP}|cut -d/ -f2)
@@ -36,14 +35,14 @@ systemd() {
 wireguard_router_config() {
     node_id=${1}
     next_node_id=$((${1}+1))
-cat << EOF > ${OUTPUT_DIR}/1/${WIREGUARD_IF_NAME}.conf
+cat << EOF > ${OUTPUT_DIR}/${node_id}/${WIREGUARD_IF_NAME}.conf
 [Interface]
-PrivateKey = $(cat ${OUTPUT_DIR}/1/private)
+PrivateKey = $(cat ${OUTPUT_DIR}/${node_id}/private)
 ListenPort = ${WIREGUARD_PORT}
 
 [Peer]
 PublicKey = $(cat ${OUTPUT_DIR}/${next_node_id}/public)
-Endpoint = ${WIREGUARD_MIDDLE_MAN_IP}:${WIREGUARD_PORT}
+Endpoint = $(cat ${OUTPUT_DIR}/${next_node_id}/public_ip):${WIREGUARD_PORT}
 AllowedIPs = 0.0.0.0/0
 EOF
 }
@@ -94,7 +93,7 @@ PostDown = iptables -t mangle -D PREROUTING -i ${WIREGUARD_IF_NAME} -j MARK --se
 PostDown = iptables -t nat -D POSTROUTING ! -o ${WIREGUARD_IF_NAME} -m mark --mark 0x30 -j MASQUERADE
 
 # previous node
-[Peer] 
+[Peer]
 PublicKey = $(cat $OUTPUT_DIR/${previous_node_id}/public)
 Endpoint = 178.62.29.162:45162
 AllowedIPs = $(cat $OUTPUT_DIR/${previous_node_id}/wireguard_ip)/${CIDR}
@@ -108,7 +107,7 @@ get_input() {
     read -p "${1}: " ${2}
 }
 
-save_user_answer() {
+save_user_answer_to_shared_file() {
     # $1 - variable name
     # $2 - variable's value
 
@@ -121,11 +120,25 @@ save_user_answer() {
    fi
 }
 
+save_user_answer_to_separate_file() {
+	# $1 - node id
+	# $2 - file name
+	# $3 - file value
+	echo "${3}" > ${OUTPUT_DIR}/${1}/${2}
+}
+
 get_and_save_user_input() {
     # $1 - prompt to display
-    # $2 - variable name
+    # $2 - variable or filel name (see next option)
+    # $3 - 'shared' to save to shared configuration file or "new" to save to new file in specific node's dir
+    # $4 - if parameter $3 was set to "new" then this should be containing the node_id
     get_input "${1}" ${2}
-    save_user_answer ${2} "${!2}"
+
+    if [[ ${3} == 'shared' ]]; then
+    	save_user_answer_to_shared_file ${2} "${!2}"
+    elif [[ ${3} == 'new' ]]; then
+	save_user_answer_to_separate_file ${4} ${2} "${!2}"
+    fi
 }
 
 get_and_save_user_input_if_missing() {
@@ -170,12 +183,14 @@ collect_data_from_user
 
 source ${USER_ANSWERS_FILE}
 
+# Generate keys and IPs that will be required for template generation
 NEXT_NODE_MUST_HAVE_PUBLIC_IP=false
 for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
-    echo "Node ${NODE_ID}"
     mkdir -p ${OUTPUT_DIR}/${NODE_ID}
+    wireguard_generate_keys ${NODE_ID}
+    get_next_ip "${WIREGUARD_START_IP}" ${NODE_ID}
 
-    echo "nest node must have ip: ${NEXT_NODE_MUST_HAVE_PUBLIC_IP}"
+    echo "Node ${NODE_ID}"
 
     if [[ ${NEXT_NODE_MUST_HAVE_PUBLIC_IP} == false ]]; then
         get_and_save_user_input_if_missing "Does node ${NODE_ID} have public IP" NODE_${NODE_ID}_HAS_PUBLIC_IP
@@ -192,21 +207,21 @@ for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
 
     if [[ ${!THIS_NODE_HAS_PUBLIC_IP} == 'y' || ${NEXT_NODE_MUST_HAVE_PUBLIC_IP} == true ]]; then
         NEXT_NODE_MUST_HAVE_PUBLIC_IP=false
-        get_and_save_user_input_if_missing "Provide public address of node ${NODE_ID}" NODE_${NODE_ID}_PUBLIC_IP
+        get_and_save_user_input "Provide public address of node ${NODE_ID}" public_ip new ${NODE_ID}
 
-        THIS_NODE_IP=NODE_${NODE_ID}_PUBLIC_IP
-        if [[ -z ${!THIS_NODE_IP} ]]; then
-            echo "DUPA, zabawy nie ma"
-            exit 1
-        fi
+#        THIS_NODE_IP=NODE_${NODE_ID}_PUBLIC_IP
+#        if [[ -z ${!THIS_NODE_IP} ]]; then
+#            echo "Error! This node must have public IP."
+#            exit 1
+#        fi
     else
         NEXT_NODE_MUST_HAVE_PUBLIC_IP=true
     fi
+done
 
 
-    wireguard_generate_keys ${NODE_ID}
-    get_next_ip "${WIREGUARD_START_IP}" ${NODE_ID}
-
+# Render templates
+for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
     if [[ ${NODE_ID} == 1 ]]; then
         wireguard_router_config ${NODE_ID}
     elif [[ ${NODE_ID} < ${NODE_COUNT} ]]; then
@@ -221,3 +236,4 @@ done
 #systemd
 
 #wireguard
+
