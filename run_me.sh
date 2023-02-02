@@ -10,7 +10,7 @@ CIDR=$(echo ${WIREGUARD_START_IP}|cut -d/ -f2)
 OUTPUT_DIR=./output
 USER_ANSWERS_FILE=${OUTPUT_DIR}/configuration.ini
 
-prerequsites(){
+prerequisites(){
     mkdir -p ${OUTPUT_DIR}
     if [[ ! -f ${USER_ANSWERS_FILE} ]]; then
         touch ${USER_ANSWERS_FILE}
@@ -66,11 +66,15 @@ PostDown = ip rule del iif ${WIREGUARD_IF_NAME} table 123 priority 456
 [Peer]
 PublicKey = $(cat $OUTPUT_DIR/${previous_node_id}/public)
 AllowedIPs = $(cat $OUTPUT_DIR/${previous_node_id}/wireguard_ip)/${CIDR}
+$( [[ -f $OUTPUT_DIR/${previous_node_id}/public_ip ]] && echo "Endpoint = $(cat $OUTPUT_DIR/${previous_node_id}/public_ip):${WIREGUARD_PORT}" )
+$( [[ ! -f $OUTPUT_DIR/${node_id}/public_ip ]] && echo "PersistentKeepalive = 25" )
 
 # next node
 [Peer]
 PublicKey = $(cat $OUTPUT_DIR/${next_node_id}/public)
 AllowedIPs = 0.0.0.0/0
+$( [[ -f $OUTPUT_DIR/${next_node_id}/public_ip ]] && echo "Endpoint = $(cat $OUTPUT_DIR/${next_node_id}/public_ip):${WIREGUARD_PORT}" )
+$( [[ ! -f $OUTPUT_DIR/${node_id}/public_ip ]] && echo "PersistentKeepalive = 25" )
 EOF
 }
 
@@ -83,6 +87,7 @@ cat << EOF > ${OUTPUT_DIR}/${node_id}/${WIREGUARD_IF_NAME}.conf
 Address = $(cat ${OUTPUT_DIR}/${node_id}/wireguard_ip)
 ListenPort = ${WIREGUARD_PORT}
 PrivateKey = $(cat ${OUTPUT_DIR}/${node_id}/private)
+MTU = 1500
 
 # IP forwarding
 PreUp = sysctl -w net.ipv4.ip_forward=1
@@ -95,9 +100,9 @@ PostDown = iptables -t nat -D POSTROUTING ! -o ${WIREGUARD_IF_NAME} -m mark --ma
 # previous node
 [Peer]
 PublicKey = $(cat $OUTPUT_DIR/${previous_node_id}/public)
-Endpoint = 178.62.29.162:45162
 AllowedIPs = $(cat $OUTPUT_DIR/${previous_node_id}/wireguard_ip)/${CIDR}
-PersistentKeepalive = 25
+$( [[ -f $OUTPUT_DIR/${previous_node_id}/public_ip ]] && echo "Endpoint = $(cat $OUTPUT_DIR/${previous_node_id}/public_ip):${WIREGUARD_PORT}" )
+$( [[ ! -f $OUTPUT_DIR/${node_id}/public_ip ]] && echo "PersistentKeepalive = 25" )
 EOF
 }
 
@@ -129,34 +134,36 @@ save_user_answer_to_separate_file() {
 
 get_and_save_user_input() {
     # $1 - prompt to display
-    # $2 - variable or filel name (see next option)
-    # $3 - 'shared' to save to shared configuration file or "new" to save to new file in specific node's dir
+    # $2 - variable or file name (see next option)
+    # $3 - 'shared' to save to shared configuration file or "new" to save to new file in specific node's directory
     # $4 - if parameter $3 was set to "new" then this should be containing the node_id
     get_input "${1}" ${2}
 
     if [[ ${3} == 'shared' ]]; then
-    	save_user_answer_to_shared_file ${2} "${!2}"
+        save_user_answer_to_shared_file ${2} "${!2}"
     elif [[ ${3} == 'new' ]]; then
-	save_user_answer_to_separate_file ${4} ${2} "${!2}"
+        save_user_answer_to_separate_file ${4} ${2} "${!2}"
     fi
 }
 
 get_and_save_user_input_if_missing() {
     # $1 - prompt to display
-    # $2 - variable name
-    grep -q "${2}=.\+" ${USER_ANSWERS_FILE}
+    # $2 - variable or file name (see next option)
+    # $3 - 'shared' to save to shared configuration file or "new" to save to new file in specific node's directory
+    # $4 - if parameter $3 was set to "new" then this should be containing the node_id
+    if [[ ${3} == 'shared' ]]; then
+        grep -q "${2}=.\+" ${USER_ANSWERS_FILE}
+    elif [[ ${3} == 'new' ]]; then
+        ls ${OUTPUT_DIR}/${4}/${2} 2>/dev/null
+    fi
 
-    if [[ ${?} == 1 ]]; then
-        get_and_save_user_input "${1}" ${2}
+    if [[ ${?} != 0 ]]; then
+        get_and_save_user_input "${1}" ${2} ${3} ${4}
     fi
 }
 
 collect_data_from_user() {
-    get_and_save_user_input_if_missing "Enter node count" NODE_COUNT
-}
-
-wireguard() {
-    wireguard_router_config
+    get_and_save_user_input_if_missing "Enter node count" NODE_COUNT shared
 }
 
 wireguard_generate_keys() {
@@ -177,8 +184,8 @@ get_next_ip() {
     echo "${o1}.${o2}.${o3}.$((o4+${2}*10))" > ${OUTPUT_DIR}/${2}/wireguard_ip
 }
 
-#install_requirements
-prerequsites
+install_requirements
+prerequisites
 collect_data_from_user
 
 source ${USER_ANSWERS_FILE}
@@ -193,7 +200,7 @@ for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
     echo "Node ${NODE_ID}"
 
     if [[ ${NEXT_NODE_MUST_HAVE_PUBLIC_IP} == false ]]; then
-        get_and_save_user_input_if_missing "Does node ${NODE_ID} have public IP" NODE_${NODE_ID}_HAS_PUBLIC_IP
+        get_and_save_user_input_if_missing "Does node ${NODE_ID} have public IP" NODE_${NODE_ID}_HAS_PUBLIC_IP shared 
     else
         export NODE_${NODE_ID}_HAS_PUBLIC_IP='y'
     fi
@@ -207,7 +214,7 @@ for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
 
     if [[ ${!THIS_NODE_HAS_PUBLIC_IP} == 'y' || ${NEXT_NODE_MUST_HAVE_PUBLIC_IP} == true ]]; then
         NEXT_NODE_MUST_HAVE_PUBLIC_IP=false
-        get_and_save_user_input "Provide public address of node ${NODE_ID}" public_ip new ${NODE_ID}
+        get_and_save_user_input_if_missing "Provide public address of node ${NODE_ID}" public_ip new ${NODE_ID}
 
 #        THIS_NODE_IP=NODE_${NODE_ID}_PUBLIC_IP
 #        if [[ -z ${!THIS_NODE_IP} ]]; then
@@ -235,5 +242,4 @@ done
 #hostapd
 #systemd
 
-#wireguard
 
