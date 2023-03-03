@@ -7,6 +7,7 @@ WIREGUARD_START_IP=192.168.5.0/24
 
 CIDR=$(echo ${WIREGUARD_START_IP}|cut -d/ -f2)
 
+SERVICE_FILE=./wfh-anywhere-vpn-router.service
 OUTPUT_DIR=./output
 USER_ANSWERS_FILE=${OUTPUT_DIR}/configuration.ini
 
@@ -19,7 +20,7 @@ prerequisites(){
 
 install_requirements() {
     apt update
-    apt install isc-dhcp-common dnsmasq hostapd iptables iproute2 wireguard sed -y
+    apt install isc-dhcp-common dnsmasq hostapd iptables iproute2 wireguard sed gettext-base -y
 }
 
 hostapd() {
@@ -28,8 +29,8 @@ hostapd() {
 }
 
 systemd() {
-    cp ./vpn-miron.service /usr/lib/systemd/system/
-    systemctl enable vpn-miron.service
+    cp ./vpn.service /usr/lib/systemd/system/${WIREGUARD_IF_NAME}.service
+    systemctl enable ${WIREGUARD_IF_NAME}.service
 }
 
 wireguard_router_config() {
@@ -41,8 +42,9 @@ PrivateKey = $(cat ${OUTPUT_DIR}/${node_id}/private)
 ListenPort = ${WIREGUARD_PORT}
 
 [Peer]
+$( [[ -f $OUTPUT_DIR/${next_node_id}/public_ip ]] && echo "Endpoint = $(cat $OUTPUT_DIR/${next_node_id}/public_ip):${WIREGUARD_PORT}" )
+$( [[ ! -f $OUTPUT_DIR/${node_id}/public_ip ]] && echo "PersistentKeepalive = 25" )
 PublicKey = $(cat ${OUTPUT_DIR}/${next_node_id}/public)
-Endpoint = $(cat ${OUTPUT_DIR}/${next_node_id}/public_ip):${WIREGUARD_PORT}
 AllowedIPs = 0.0.0.0/0
 EOF
 }
@@ -68,7 +70,6 @@ PublicKey = $(cat $OUTPUT_DIR/${previous_node_id}/public)
 AllowedIPs = $(cat $OUTPUT_DIR/${previous_node_id}/wireguard_ip)/${CIDR}
 $( [[ -f $OUTPUT_DIR/${previous_node_id}/public_ip ]] && echo "Endpoint = $(cat $OUTPUT_DIR/${previous_node_id}/public_ip):${WIREGUARD_PORT}" )
 $( [[ ! -f $OUTPUT_DIR/${node_id}/public_ip ]] && echo "PersistentKeepalive = 25" )
-
 # next node
 [Peer]
 PublicKey = $(cat $OUTPUT_DIR/${next_node_id}/public)
@@ -104,6 +105,53 @@ AllowedIPs = $(cat $OUTPUT_DIR/${previous_node_id}/wireguard_ip)/${CIDR}
 $( [[ -f $OUTPUT_DIR/${previous_node_id}/public_ip ]] && echo "Endpoint = $(cat $OUTPUT_DIR/${previous_node_id}/public_ip):${WIREGUARD_PORT}" )
 $( [[ ! -f $OUTPUT_DIR/${node_id}/public_ip ]] && echo "PersistentKeepalive = 25" )
 EOF
+}
+
+generate_router_node_install_script() {
+export WG_IP=$(cat ${OUTPUT_DIR}/${NODE_ID}/wireguard_ip)
+cat << EOFX > ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
+apt update
+apt install wireguard iptables psmisc -y
+
+cat << EOF > /usr/lib/systemd/system/wfh-anywhere-vpn-${WIREGUARD_IF_NAME}.service
+$(cat ${SERVICE_FILE})
+EOF
+
+cat << EOF > /etc/wireguard/${WIREGUARD_IF_NAME}.conf
+$(cat ${OUTPUT_DIR}/${NODE_ID}/${WIREGUARD_IF_NAME}.conf)
+EOF
+
+
+cat << EOF > /usr/local/bin/wfh-anywhere-vpn.sh
+$(cat ./wfh-anywhere-vpn.sh | envsubst '${WG_IP}' | sed 's/\$/\\$/g')
+EOF
+chmod u+x /usr/local/bin/wfh-anywhere-vpn.sh
+
+systemctl enable wfh-anywhere-vpn-${WIREGUARD_IF_NAME}
+systemctl start wfh-anywhere-vpn-${WIREGUARD_IF_NAME}
+systemctl status wfh-anywhere-vpn-${WIREGUARD_IF_NAME}
+
+systemctl enable wg-quick@${WIREGUARD_IF_NAME}
+systemctl start wg-quick@${WIREGUARD_IF_NAME}
+systemctl status wg-quick@${WIREGUARD_IF_NAME}
+EOFX
+chmod u+x ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
+}
+
+generate_every_next_node_install_script() {
+cat << EOFX > ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
+apt update
+apt install wireguard iptables -y
+
+cat << EOF > /etc/wireguard/${WIREGUARD_IF_NAME}.conf
+$(cat ${OUTPUT_DIR}/${NODE_ID}/${WIREGUARD_IF_NAME}.conf)
+EOF
+
+systemctl enable wg-quick@${WIREGUARD_IF_NAME}
+systemctl start wg-quick@${WIREGUARD_IF_NAME}
+systemctl status wg-quick@${WIREGUARD_IF_NAME}
+EOFX
+chmod u+x ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 }
 
 get_input() {
@@ -184,6 +232,7 @@ get_next_ip() {
     echo "${o1}.${o2}.${o3}.$((o4+${2}*10))" > ${OUTPUT_DIR}/${2}/wireguard_ip
 }
 
+
 install_requirements
 prerequisites
 collect_data_from_user
@@ -200,7 +249,7 @@ for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
     echo "Node ${NODE_ID}"
 
     if [[ ${NEXT_NODE_MUST_HAVE_PUBLIC_IP} == false ]]; then
-        get_and_save_user_input_if_missing "Does node ${NODE_ID} have public IP" NODE_${NODE_ID}_HAS_PUBLIC_IP shared 
+        get_and_save_user_input_if_missing "Does node ${NODE_ID} have public IP (y/n)?" NODE_${NODE_ID}_HAS_PUBLIC_IP shared 
     else
         export NODE_${NODE_ID}_HAS_PUBLIC_IP='y'
     fi
@@ -231,15 +280,13 @@ done
 for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
     if [[ ${NODE_ID} == 1 ]]; then
         wireguard_router_config ${NODE_ID}
+        generate_router_node_install_script
     elif [[ ${NODE_ID} < ${NODE_COUNT} ]]; then
         wireguard_middle_man_config ${NODE_ID}
+        generate_every_next_node_install_script
     else
         wireguard_last_node_config ${NODE_ID}
+        generate_every_next_node_install_script
     fi
 done
-
-
-#hostapd
-#systemd
-
 
