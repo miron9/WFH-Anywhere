@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 
-#WIREGUARD_PORT=45162
 WIREGUARD_IF_NAME=wgvpn0
 WIREGUARD_PORT=51820
 WIREGUARD_START_IP=192.168.5.0/24
@@ -264,12 +263,6 @@ for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
     if [[ ${!THIS_NODE_HAS_PUBLIC_IP} == 'y' || ${NEXT_NODE_MUST_HAVE_PUBLIC_IP} == true ]]; then
         NEXT_NODE_MUST_HAVE_PUBLIC_IP=false
         get_and_save_user_input_if_missing "Provide public address of node ${NODE_ID}" public_ip new ${NODE_ID}
-
-#        THIS_NODE_IP=NODE_${NODE_ID}_PUBLIC_IP
-#        if [[ -z ${!THIS_NODE_IP} ]]; then
-#            echo "Error! This node must have public IP."
-#            exit 1
-#        fi
     else
         NEXT_NODE_MUST_HAVE_PUBLIC_IP=true
     fi
