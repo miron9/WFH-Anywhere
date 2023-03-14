@@ -3,12 +3,13 @@ set -x
 
 WG_IP=${WG_IP}
 NS=phy
-WG_IF_NAME=wgvpn0
+WG_IF_NAME=${WG_IF_NAME}
 
 function stop_network_managers() {
     # Stop network managers that could get in our way
-    systemctl stop NetworkManager
-    systemctl stop systemd-networkd
+    systemctl stop NetworkManager.service
+    systemctl stop systemd-networkd.socket
+    systemctl stop systemd-networkd.service
 
     systemctl is-active systemd-networkd
     if [[ ${?} != 3 ]]
@@ -93,7 +94,7 @@ function wg_vpn() {
     #Wireguard setup
     ip -n ${NS} link add ${WG_IF_NAME} type wireguard
     ip -n ${NS} link set ${WG_IF_NAME} netns 1
-    wg setconf ${WG_IF_NAME} /etc/wireguard/wgvpn0.conf
+    wg setconf ${WG_IF_NAME} /etc/wireguard/${WG_IF_NAME}.conf
     sleep 1
     ip addr add ${WG_IP}/32 dev ${WG_IF_NAME}
     ip link set ${WG_IF_NAME} up

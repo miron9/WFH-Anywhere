@@ -5,7 +5,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=service
+Type=exec
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/wfh-anywhere-vpn.sh systemd-start
 ExecStop=/usr/local/bin/wfh-anywhere-vpn.sh systemd-stop
