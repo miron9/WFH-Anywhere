@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
 # TODO
-# - if rerunning with existing configfile it should not fail as it doesn't get the IP from disk to verify it
+# inject WIFI password and config
+# get CIDR for WG from user
 
 WIREGUARD_PORT=51820
 WIREGUARD_START_IP=192.168.5.0/24
@@ -212,14 +213,18 @@ get_and_save_user_input_if_missing() {
     # $3 - 'shared' to save to shared configuration file or "new" to save to new file in specific node's directory
     # $4 - default value
     # $5 - if parameter $3 was set to "new" then this should be containing the node_id
+    #
+    # return 0 if new value saved (default) or 2 if  existing value was found
     if [[ ${3} == 'shared' ]]; then
         grep -q "${2}=.\+" ${USER_ANSWERS_FILE}
     elif [[ ${3} == 'new' ]]; then
-        ls ${OUTPUT_DIR}/${5}/${2} 2>/dev/null
+        ls ${OUTPUT_DIR}/${5}/${2} > /dev/null 2>&1
     fi
 
     if [[ ${?} != 0 ]]; then
         get_and_save_user_input "${1}" ${2} ${3} ${4} ${5}
+    else
+        return 2
     fi
 }
 
@@ -280,8 +285,13 @@ for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
     if [[ ${!THIS_NODE_HAS_PUBLIC_IP} == 'y' || ${NEXT_NODE_MUST_HAVE_PUBLIC_IP} == true ]]; then
         NEXT_NODE_MUST_HAVE_PUBLIC_IP=false
         get_and_save_user_input_if_missing "Provide public address of node ${NODE_ID}" public_ip new "-" ${NODE_ID} 
-        echo ${public_ip} | grep -qsEo "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$"
-        [[ ${?} != 0 ]] && echo "This is not a valid IP address. Edit or remove ./output/configuration.ini to continue or start fresh." && exit 1
+
+        # RC=2 from the command above will return true if value already existed
+        # hence no need to verify again here which would cause problems
+        if [[ ${?} != 2 ]]; then
+            echo ${public_ip} | grep -qsEo "^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$"
+            [[ ${?} != 0 ]] && echo "This is not a valid IP address. Edit or remove ./output/configuration.ini to continue or start fresh." && exit 1
+        fi
     else
         NEXT_NODE_MUST_HAVE_PUBLIC_IP=true
     fi
