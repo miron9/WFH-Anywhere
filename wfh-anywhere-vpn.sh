@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -x
 
-WG_IP=${WG_IP}
+WIREGUARD_IP=${WIREGUARD_IP}
+WIREGUARD_INTERFACE_NAME=${WIREGUARD_INTERFACE_NAME}
 NS=phy
-WG_IF_NAME=${WG_IF_NAME}
 
-function stop_network_managers() {
+stop_network_managers() {
     # Stop network managers that could get in our way
     systemctl stop NetworkManager.service
     systemctl stop systemd-networkd.socket
@@ -26,7 +26,7 @@ function stop_network_managers() {
 }
 
 
-function dhcp() {
+dhcp() {
     case ${1} in
         up)
             ip netns exec phy dhclient -pf /var/run/dhclient.pid -4 -nw
@@ -44,7 +44,7 @@ function dhcp() {
     esac
 }
 
-function ensure_netns_exists() {
+ensure_netns_exists() {
     NS_EXIST=$(ip netns list|grep -c ${NS})
     if [[ ${NS_EXIST} == 0 ]]
     then
@@ -52,7 +52,7 @@ function ensure_netns_exists() {
     fi
 }
 
-function move_ifs_to_netns() { 
+move_ifs_to_netns() { 
     case ${1} in
         start)
             echo $BASHPID > /tmp/ensure_netns.pid
@@ -89,19 +89,23 @@ function move_ifs_to_netns() {
     esac
 }
 
-function wg_vpn() {
+wg_vpn() {
     ensure_netns_exists
     #Wireguard setup
-    ip -n ${NS} link add ${WG_IF_NAME} type wireguard
-    ip -n ${NS} link set ${WG_IF_NAME} netns 1
-    wg setconf ${WG_IF_NAME} /etc/wireguard/${WG_IF_NAME}.conf
+    ip -n ${NS} link add ${WIREGUARD_INTERFACE_NAME} type wireguard
+    ip -n ${NS} link set ${WIREGUARD_INTERFACE_NAME} netns 1
+    wg setconf ${WIREGUARD_INTERFACE_NAME} <(wg-quick strip /etc/wireguard/${WIREGUARD_INTERFACE_NAME}.conf)
+
+    iptables -I INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
+    iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
     sleep 1
-    ip addr add ${WG_IP}/32 dev ${WG_IF_NAME}
-    ip link set ${WG_IF_NAME} up
-    ip route add default dev ${WG_IF_NAME}
+    ip addr add ${WIREGUARD_IP}/32 dev ${WIREGUARD_INTERFACE_NAME}
+    ip link set ${WIREGUARD_INTERFACE_NAME} up
+    ip route add default dev ${WIREGUARD_INTERFACE_NAME}
 }
 
-function hotspot() {
+hotspot() {
 	# prep the wlan0 interface for hostapd and dnsmasq by giving it an IP
 	ip addr add 10.0.0.1/24 dev wlan0
 	hostapd -B /etc/hostapd/simple.conf
@@ -109,30 +113,33 @@ function hotspot() {
 	systemctl restart dnsmasq.service
 
 	# enable local port forward from WiFi to Wireguard
-	iptables -I FORWARD 1 -i wlan0 -o ${WG_IF_NAME} -j ACCEPT
-	iptables -I FORWARD 1 -i ${WG_IF_NAME} -o wlan0 -j ACCEPT
-	iptables -t nat -I POSTROUTING 1 -s 10.0.0.1/24 -o ${WG_IF_NAME} -j MASQUERADE
+	iptables -I FORWARD 1 -i wlan0 -o ${WIREGUARD_INTERFACE_NAME} -j ACCEPT
+	iptables -I FORWARD 1 -i ${WIREGUARD_INTERFACE_NAME} -o wlan0 -j ACCEPT
+	iptables -t nat -I POSTROUTING 1 -s 10.0.0.1/24 -o ${WIREGUARD_INTERFACE_NAME} -j MASQUERADE
 }
 
-function down() {
+down() {
     IF=$(ip -n ${NS} link|grep enx|cut -d: -f2|tr -d ' ')
 
     IP_CIDR=$(ip -n ${NS} addr show ${IF}|grep -Eo "([0-9.]{7,25})/([0-9]{1,2})")
     IP=${IP_CIDR%/*}
     CIDR=${IP_CIDR#*/}
 
-    iptables -D FORWARD -i wlan0 -o ${WG_IF_NAME} -j ACCEPT
-    iptables -D FORWARD -i ${WG_IF_NAME} -o wlan0 -j ACCEPT
-    iptables -t nat -D POSTROUTING -s 10.0.0.1/24 -o ${WG_IF_NAME} -j MASQUERADE
+    iptables -D FORWARD -i wlan0 -o ${WIREGUARD_INTERFACE_NAME} -j ACCEPT
+    iptables -D FORWARD -i ${WIREGUARD_INTERFACE_NAME} -o wlan0 -j ACCEPT
+    iptables -t nat -D POSTROUTING -s 10.0.0.1/24 -o ${WIREGUARD_INTERFACE_NAME} -j MASQUERADE
+
+    iptables -D INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
+    iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
     killall hostapd
 
     ip addr del 10.0.0.1/24 dev wlan0
-    ip route del default dev ${WG_IF_NAME}
-    ip link set ${WG_IF_NAME} down
-    ip addr del ${WG_IP}/32 dev ${WG_IF_NAME}
+    ip route del default dev ${WIREGUARD_INTERFACE_NAME}
+    ip link set ${WIREGUARD_INTERFACE_NAME} down
+    ip addr del ${WIREGUARD_IP}/32 dev ${WIREGUARD_INTERFACE_NAME}
 
-    ip link del ${WG_IF_NAME} type wireguard
+    ip link del ${WIREGUARD_INTERFACE_NAME} type wireguard
 
     ip -n ${NS} link set dev ${IF} down
     ip -n ${NS} link set dev eth0 down

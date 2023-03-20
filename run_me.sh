@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 
 # TODO
-# get CIDR for WG from user
-
-#WIREGUARD_PORT=51820
-#WIREGUARD_CIDR=192.168.5.0/24
+# WG config on router is stripped and then injected into interface and thus 
+# any addional, wg-quick specific config in that file is not applied:
+# I need to add the IPTABLES rules somewhere else
 
 # Functions START
 prerequisites(){
@@ -26,11 +25,6 @@ hostapd_config() {
     cat ./hostapd.conf | envsubst > ${OUTPUT_DIR}/${node_id}/hostapd.conf
 }
 
-#systemd() {
-#    cp ./vpn.service /usr/lib/systemd/system/${WIREGUARD_INTERFACE_NAME}.service
-#    systemctl enable ${WIREGUARD_INTERFACE_NAME}.service
-#}
-
 wireguard_router_config() {
     node_id=${1}
     next_node_id=$((${1}+1))
@@ -38,6 +32,11 @@ cat << EOF > ${OUTPUT_DIR}/${node_id}/${WIREGUARD_INTERFACE_NAME}.conf
 [Interface]
 PrivateKey = $(cat ${OUTPUT_DIR}/${node_id}/private)
 ListenPort = ${WIREGUARD_PORT}
+
+PreUp = iptables -I INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
+PreUp = iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+PostDown = iptables -D INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
+PostDown = iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 [Peer]
 $( [[ -f $OUTPUT_DIR/${next_node_id}/public_ip ]] && echo "Endpoint = $(cat $OUTPUT_DIR/${next_node_id}/public_ip):${WIREGUARD_PORT}" )
@@ -60,7 +59,11 @@ Table = 123
 
 PreUp = sysctl -w net.ipv4.ip_forward=1
 PreUp = ip rule add iif ${WIREGUARD_INTERFACE_NAME} table 123 priority 456
+PreUp = iptables -I INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
+PreUp = iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 PostDown = ip rule del iif ${WIREGUARD_INTERFACE_NAME} table 123 priority 456
+PostDown = iptables -D INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
+PostDown = iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 # previous node
 [Peer]
@@ -96,6 +99,11 @@ PreUp = iptables -t nat -A POSTROUTING ! -o ${WIREGUARD_INTERFACE_NAME} -m mark 
 PostDown = iptables -t mangle -D PREROUTING -i ${WIREGUARD_INTERFACE_NAME} -j MARK --set-mark 0x30
 PostDown = iptables -t nat -D POSTROUTING ! -o ${WIREGUARD_INTERFACE_NAME} -m mark --mark 0x30 -j MASQUERADE
 
+PreUp = iptables -I INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
+PreUp = iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+PostDown = iptables -D INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
+PostDown = iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
 # previous node
 [Peer]
 PublicKey = $(cat $OUTPUT_DIR/${previous_node_id}/public)
@@ -106,12 +114,13 @@ EOF
 }
 
 generate_router_node_install_script() {
-export WG_IP=$(cat ${OUTPUT_DIR}/${NODE_ID}/wireguard_ip)
-export WG_IF_NAME=${WIREGUARD_INTERFACE_NAME}
+export WIREGUARD_IP=$(cat ${OUTPUT_DIR}/${NODE_ID}/wireguard_ip)
+export WIREGUARD_INTERFACE_NAME
+export WIREGUARD_PORT
 
 cat << EOFX > ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 apt update
-apt install wireguard iptables psmisc -y
+apt install wireguard iptables psmisc hostapd -y
 
 cat << EOF > /usr/lib/systemd/system/wfh-anywhere-vpn-${WIREGUARD_INTERFACE_NAME}.service
 $(cat ${SERVICE_FILE})
@@ -123,7 +132,7 @@ EOF
 
 
 cat << EOF > /usr/local/bin/wfh-anywhere-vpn.sh
-$(cat ./wfh-anywhere-vpn.sh | envsubst '${WG_IP},${WG_IF_NAME}' | sed 's/\$/\\$/g')
+$(cat ./wfh-anywhere-vpn.sh | envsubst '${WIREGUARD_INTERFACE_NAME},${WIREGUARD_IP},${WIREGUARD_PORT}' | sed 's/\$/\\$/g')
 EOF
 chmod u+x /usr/local/bin/wfh-anywhere-vpn.sh
 
@@ -134,6 +143,10 @@ EOF
 systemctl enable wfh-anywhere-vpn-${WIREGUARD_INTERFACE_NAME}
 systemctl start wfh-anywhere-vpn-${WIREGUARD_INTERFACE_NAME}
 systemctl status wfh-anywhere-vpn-${WIREGUARD_INTERFACE_NAME}
+
+systemctl unmask hostapd
+systemctl enable hostapd
+systemctl start hostapd
 EOFX
 chmod u+x ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 }
