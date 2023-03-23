@@ -10,6 +10,7 @@ stop_network_managers() {
     systemctl stop NetworkManager.service
     systemctl stop systemd-networkd.socket
     systemctl stop systemd-networkd.service
+    systemctl stop systemd-resolved.service
 
     systemctl is-active systemd-networkd
     if [[ ${?} != 3 ]]
@@ -91,6 +92,7 @@ move_ifs_to_netns() {
 
 wg_vpn() {
     ensure_netns_exists
+
     #Wireguard setup
     ip -n ${NS} link add ${WIREGUARD_INTERFACE_NAME} type wireguard
     ip -n ${NS} link set ${WIREGUARD_INTERFACE_NAME} netns 1
@@ -100,9 +102,12 @@ wg_vpn() {
     iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
     sleep 1
+
     ip addr add ${WIREGUARD_IP}/32 dev ${WIREGUARD_INTERFACE_NAME}
     ip link set ${WIREGUARD_INTERFACE_NAME} up
     ip route add default dev ${WIREGUARD_INTERFACE_NAME}
+
+    sysctl -w net.ipv4.ip_forward=1
 }
 
 hotspot() {
@@ -124,6 +129,8 @@ down() {
     IP_CIDR=$(ip -n ${NS} addr show ${IF}|grep -Eo "([0-9.]{7,25})/([0-9]{1,2})")
     IP=${IP_CIDR%/*}
     CIDR=${IP_CIDR#*/}
+
+    sysctl -w net.ipv4.ip_forward=0
 
     iptables -D FORWARD -i wlan0 -o ${WIREGUARD_INTERFACE_NAME} -j ACCEPT
     iptables -D FORWARD -i ${WIREGUARD_INTERFACE_NAME} -o wlan0 -j ACCEPT
@@ -171,6 +178,6 @@ case ${1} in
         move_ifs_to_netns start
         ;;
     *)
-        echo "oh no, this options is not supported"
+        echo "oh no, this option is not supported"
         ;;
 esac

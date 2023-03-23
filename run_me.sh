@@ -3,7 +3,7 @@
 # TODO
 # WG config on router is stripped and then injected into interface and thus 
 # any addional, wg-quick specific config in that file is not applied:
-# I need to add the IPTABLES rules somewhere else
+# add exmplanation why specific package is being installed in install_requirements
 
 # Functions START
 prerequisites(){
@@ -16,10 +16,10 @@ prerequisites(){
 install_requirements() {
     echo "*** Installing required tools"
     apt update
-    apt install isc-dhcp-common dnsmasq hostapd iptables iproute2 wireguard sed gettext-base -y
+    apt install isc-dhcp-common iptables iproute2 wireguard sed gettext-base -y
 }
 
-hostapd_config() {
+hostapd_configuration() {
     node_id=${1}
     export HOTSPOT_NAME HOTSPOT_PASSWORD
     cat ./hostapd.conf | envsubst > ${OUTPUT_DIR}/${node_id}/hostapd.conf
@@ -32,6 +32,9 @@ cat << EOF > ${OUTPUT_DIR}/${node_id}/${WIREGUARD_INTERFACE_NAME}.conf
 [Interface]
 PrivateKey = $(cat ${OUTPUT_DIR}/${node_id}/private)
 ListenPort = ${WIREGUARD_PORT}
+
+# IP forwarding
+PreUp = sysctl -w net.ipv4.ip_forward=1
 
 PreUp = iptables -I INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
 PreUp = iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -55,13 +58,15 @@ cat << EOF > ${OUTPUT_DIR}/${node_id}/${WIREGUARD_INTERFACE_NAME}.conf
 Address = $(cat ${OUTPUT_DIR}/${node_id}/wireguard_ip)
 ListenPort = ${WIREGUARD_PORT}
 PrivateKey = $(cat ${OUTPUT_DIR}/${node_id}/private)
-Table = 123
+Table = ${RANDOM_TABLE_ID}
 
+# IP forwarding
 PreUp = sysctl -w net.ipv4.ip_forward=1
-PreUp = ip rule add iif ${WIREGUARD_INTERFACE_NAME} table 123 priority 456
+
+PreUp = ip rule add iif ${WIREGUARD_INTERFACE_NAME} table ${RANDOM_TABLE_ID} priority 10
 PreUp = iptables -I INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
 PreUp = iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-PostDown = ip rule del iif ${WIREGUARD_INTERFACE_NAME} table 123 priority 456
+PostDown = ip rule del iif ${WIREGUARD_INTERFACE_NAME} table ${RANDOM_TABLE_ID} priority 10
 PostDown = iptables -D INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
 PostDown = iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
@@ -93,6 +98,7 @@ MTU = 1500
 
 # IP forwarding
 PreUp = sysctl -w net.ipv4.ip_forward=1
+
 # IPv4 masquerading
 PreUp = iptables -t mangle -A PREROUTING -i ${WIREGUARD_INTERFACE_NAME} -j MARK --set-mark 0x30
 PreUp = iptables -t nat -A POSTROUTING ! -o ${WIREGUARD_INTERFACE_NAME} -m mark --mark 0x30 -j MASQUERADE
@@ -113,6 +119,27 @@ $( [[ ! -f $OUTPUT_DIR/${node_id}/public_ip ]] && echo "PersistentKeepalive = 25
 EOF
 }
 
+dnsmasq_configuration() {
+    node_id=${1}
+cat << EOF > ${OUTPUT_DIR}/${node_id}/dnsmasq.conf
+dhcp-leasefile=/var/lib/misc/dnsmasq.wlan0.leases
+#interface=wlan0
+#bind-interfaces
+listen-address=10.0.0.1,127.0.0.53,127.0.0.1
+dhcp-range=10.0.0.10,10.0.0.128,24h
+dhcp-option=6,10.0.0.1
+
+port=53
+domain-needed
+bogus-priv
+expand-hosts
+cache-size=1000
+server=8.8.4.4
+server=1.1.1.1
+server=8.8.8.8
+EOF
+}
+
 generate_router_node_install_script() {
 export WIREGUARD_IP=$(cat ${OUTPUT_DIR}/${NODE_ID}/wireguard_ip)
 export WIREGUARD_INTERFACE_NAME
@@ -120,7 +147,7 @@ export WIREGUARD_PORT
 
 cat << EOFX > ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 apt update
-apt install wireguard iptables psmisc hostapd -y
+apt install wireguard iptables psmisc hostapd dnsmasq coreutils -y
 
 cat << EOF > /usr/lib/systemd/system/wfh-anywhere-vpn-${WIREGUARD_INTERFACE_NAME}.service
 $(cat ${SERVICE_FILE})
@@ -140,6 +167,10 @@ cat << EOF > /etc/hostapd/hostapd.conf
 $(cat ${OUTPUT_DIR}/${NODE_ID}/hostapd.conf)
 EOF
 
+cat << EOF > /etc/dnsmasq.d/10-dhcp_and_dns_cache.conf
+$(cat ${OUTPUT_DIR}/${NODE_ID}/dnsmasq.conf)
+EOF
+
 systemctl enable wfh-anywhere-vpn-${WIREGUARD_INTERFACE_NAME}
 systemctl start wfh-anywhere-vpn-${WIREGUARD_INTERFACE_NAME}
 systemctl status wfh-anywhere-vpn-${WIREGUARD_INTERFACE_NAME}
@@ -154,10 +185,21 @@ chmod u+x ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 generate_every_next_node_install_script() {
 cat << EOFX > ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 apt update
-apt install wireguard iptables -y
+apt install wireguard iptables coreutils -y
+
+get_unique_route_table_id() {
+    continue=0
+    while [[ \${continue} == 0 ]]; do
+        export RANDOM_TABLE_ID=\$(shuf -i 100-1000 -n 1)
+        ip route show table all | grep -q "table \${RANDOM_TABLE_ID}"
+        continue=\${?}
+    done
+}
+
+get_unique_route_table_id
 
 cat << EOF > /etc/wireguard/${WIREGUARD_INTERFACE_NAME}.conf
-$(cat ${OUTPUT_DIR}/${NODE_ID}/${WIREGUARD_INTERFACE_NAME}.conf)
+$(cat ${OUTPUT_DIR}/${NODE_ID}/${WIREGUARD_INTERFACE_NAME}.conf | envsubst)
 EOF
 
 systemctl enable wg-quick@${WIREGUARD_INTERFACE_NAME}
@@ -238,6 +280,7 @@ get_and_save_user_input_if_missing() {
 
 collect_data_from_user() {
     get_and_save_user_input_if_missing "Enter node count" NODE_COUNT shared 3
+    echo "Warning! Make sure the interface name is unique across all nodes you will deploy this VPN. If there is a conflict your existing configuration may be overwritten!"
     get_and_save_user_input_if_missing "Wireguard interface name" WIREGUARD_INTERFACE_NAME shared "wgvpn0"
     get_and_save_user_input_if_missing "Wireguard network CIDR" WIREGUARD_CIDR shared "192.168.200.0/24"
     get_and_save_user_input_if_missing "Wireguard port" WIREGUARD_PORT shared "51820"
@@ -327,7 +370,8 @@ done
 # Render templates
 for ((NODE_ID=1; NODE_ID<=${NODE_COUNT}; NODE_ID++)); do
     if [[ ${NODE_ID} == 1 ]]; then
-        hostapd_config 1
+        hostapd_configuration 1
+        dnsmasq_configuration 1
         wireguard_router_config ${NODE_ID}
         generate_router_node_install_script
     elif [[ ${NODE_ID} < ${NODE_COUNT} ]]; then
