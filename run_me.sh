@@ -4,6 +4,9 @@
 # WG config on router is stripped and then injected into interface and thus 
 # any addional, wg-quick specific config in that file is not applied:
 # add exmplanation why specific package is being installed in install_requirements
+# - in case of running the router on Ubuntu Server 22.10 (only one tested) after a mobile phone first shares internet connection via USB
+#    the dhclient needs to be run first to configure the interface and thus gain connection to the run the script
+# - middle node got MTU 1420, it should be 1500
 
 # Functions START
 prerequisites(){
@@ -35,6 +38,12 @@ ListenPort = ${WIREGUARD_PORT}
 
 # IP forwarding
 PreUp = sysctl -w net.ipv4.ip_forward=1
+
+# IPv4 masquerading
+PreUp = iptables -t mangle -A PREROUTING -i wlan0 -j MARK --set-mark 0x30
+PreUp = iptables -t nat -A POSTROUTING ! -o wlan0 -m mark --mark 0x30 -j MASQUERADE
+PostDown = iptables -t mangle -D PREROUTING -i wlan0 -j MARK --set-mark 0x30
+PostDown = iptables -t nat -D POSTROUTING ! -o wlan0 -m mark --mark 0x30 -j MASQUERADE
 
 PreUp = iptables -I INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
 PreUp = iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT

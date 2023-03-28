@@ -118,9 +118,8 @@ hotspot() {
 	systemctl restart dnsmasq.service
 
 	# enable local port forward from WiFi to Wireguard
-	iptables -I FORWARD 1 -i wlan0 -o ${WIREGUARD_INTERFACE_NAME} -j ACCEPT
-	iptables -I FORWARD 1 -i ${WIREGUARD_INTERFACE_NAME} -o wlan0 -j ACCEPT
-	iptables -t nat -I POSTROUTING 1 -s 10.0.0.1/24 -o ${WIREGUARD_INTERFACE_NAME} -j MASQUERADE
+    iptables -t mangle -A PREROUTING -i wlan0 -j MARK --set-mark 0x30
+    iptables -t nat -A POSTROUTING ! -o wlan0 -m mark --mark 0x30 -j MASQUERADE
 }
 
 down() {
@@ -132,9 +131,8 @@ down() {
 
     sysctl -w net.ipv4.ip_forward=0
 
-    iptables -D FORWARD -i wlan0 -o ${WIREGUARD_INTERFACE_NAME} -j ACCEPT
-    iptables -D FORWARD -i ${WIREGUARD_INTERFACE_NAME} -o wlan0 -j ACCEPT
-    iptables -t nat -D POSTROUTING -s 10.0.0.1/24 -o ${WIREGUARD_INTERFACE_NAME} -j MASQUERADE
+    iptables -t mangle -D PREROUTING -i wlan0 -j MARK --set-mark 0x30
+    iptables -t nat -D POSTROUTING ! -o wlan0 -m mark --mark 0x30 -j MASQUERADE
 
     iptables -D INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
     iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
