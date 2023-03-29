@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
-# TODO
-# WG config on router is stripped and then injected into interface and thus 
-# any addional, wg-quick specific config in that file is not applied:
-# add exmplanation why specific package is being installed in install_requirements
-# - in case of running the router on Ubuntu Server 22.10 (only one tested) after a mobile phone first shares internet connection via USB
-#    the dhclient needs to be run first to configure the interface and thus gain connection to the run the script
-# - middle node got MTU 1420, it should be 1500
 
 # Functions START
-prerequisites(){
+prerequisites(){ 
+
+    # On Ubuntu server when a phone tethers USB connection the newly added interface
+    # is not being automatically configured and so we need to run dhclient which
+    # at this point we assume is present 
+    # TODO check if command exists before trying to run it
+    dhclient
+
     mkdir -p ${OUTPUT_DIR}
     if [[ ! -f ${USER_ANSWERS_FILE} ]]; then
         touch ${USER_ANSWERS_FILE}
@@ -18,8 +18,17 @@ prerequisites(){
 
 install_requirements() {
     echo "*** Installing required tools"
+    # iproute2 provide the "ip" tool 
+    # isc-dhcp-common provides the "dhclient" tool
+    # gettext-base provides the "envsubst" tool
     apt update
-    apt install isc-dhcp-common iptables iproute2 wireguard sed gettext-base -y
+    apt install -y \
+        wireguard \
+        iptables \
+        sed \
+        iproute2 \
+        isc-dhcp-common \
+        gettext-base
 }
 
 hostapd_configuration() {
@@ -68,6 +77,7 @@ Address = $(cat ${OUTPUT_DIR}/${node_id}/wireguard_ip)
 ListenPort = ${WIREGUARD_PORT}
 PrivateKey = $(cat ${OUTPUT_DIR}/${node_id}/private)
 Table = ${RANDOM_TABLE_ID}
+MTU = 1500
 
 # IP forwarding
 PreUp = sysctl -w net.ipv4.ip_forward=1
@@ -156,7 +166,15 @@ export WIREGUARD_PORT
 
 cat << EOFX > ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 apt update
-apt install wireguard iptables psmisc hostapd dnsmasq coreutils -y
+# psmisc provides the "killall" tool
+# coreutils provides the "shuf" tool
+apt install -y \
+    wireguard \
+    iptables \
+    hostapd \
+    dnsmasq \
+    psmisc \
+    coreutils  
 
 cat << EOF > /usr/lib/systemd/system/wfh-anywhere-vpn-${WIREGUARD_INTERFACE_NAME}.service
 $(cat ${SERVICE_FILE})
@@ -194,7 +212,11 @@ chmod u+x ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 generate_every_next_node_install_script() {
 cat << EOFX > ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 apt update
-apt install wireguard iptables coreutils -y
+# coreutils provides the "shuf" tool
+apt install -y \
+    wireguard \
+    iptables \
+    coreutils
 
 get_unique_route_table_id() {
     continue=0
@@ -327,8 +349,8 @@ SERVICE_FILE=./wfh-anywhere-vpn-router.service
 OUTPUT_DIR=./output
 USER_ANSWERS_FILE=${OUTPUT_DIR}/configuration.ini
 
-install_requirements
 prerequisites
+install_requirements
 collect_data_from_user
 # Prepare and collect data END
 

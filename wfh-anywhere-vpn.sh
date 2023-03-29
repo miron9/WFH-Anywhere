@@ -68,6 +68,7 @@ move_ifs_to_netns() {
                     echo ${IF}
                     ip link set dev ${IF} down
                     ip link set ${IF} netns ${NS}
+                    ip -n ${NS} link set dev ${IF} mtu 1500
                 done
                 [[ $(echo ${IFs}|wc -w) -gt 0 ]] && dhcp restart
                 sleep 5
@@ -104,6 +105,7 @@ wg_vpn() {
     sleep 1
 
     ip addr add ${WIREGUARD_IP}/32 dev ${WIREGUARD_INTERFACE_NAME}
+    ip link set dev ${WIREGUARD_INTERFACE_NAME} mtu 1500
     ip link set ${WIREGUARD_INTERFACE_NAME} up
     ip route add default dev ${WIREGUARD_INTERFACE_NAME}
 
