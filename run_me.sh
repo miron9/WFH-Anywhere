@@ -4,12 +4,6 @@
 # Functions START
 prerequisites(){ 
 
-    # On Ubuntu server when a phone tethers USB connection the newly added interface
-    # is not being automatically configured and so we need to run dhclient which
-    # at this point we assume is present 
-    # TODO check if command exists before trying to run it
-    dhclient
-
     mkdir -p ${OUTPUT_DIR}
     if [[ ! -f ${USER_ANSWERS_FILE} ]]; then
         touch ${USER_ANSWERS_FILE}
@@ -19,7 +13,6 @@ prerequisites(){
 install_requirements() {
     echo "*** Installing required tools"
     # iproute2 provide the "ip" tool 
-    # isc-dhcp-common provides the "dhclient" tool
     # gettext-base provides the "envsubst" tool
     apt update
     apt install -y \
@@ -27,7 +20,6 @@ install_requirements() {
         iptables \
         sed \
         iproute2 \
-        isc-dhcp-common \
         gettext-base
 }
 
@@ -76,16 +68,16 @@ cat << EOF > ${OUTPUT_DIR}/${node_id}/${WIREGUARD_INTERFACE_NAME}.conf
 Address = $(cat ${OUTPUT_DIR}/${node_id}/wireguard_ip)
 ListenPort = ${WIREGUARD_PORT}
 PrivateKey = $(cat ${OUTPUT_DIR}/${node_id}/private)
-Table = ${RANDOM_TABLE_ID}
+Table = \${RANDOM_TABLE_ID}
 MTU = 1500
 
 # IP forwarding
 PreUp = sysctl -w net.ipv4.ip_forward=1
 
-PreUp = ip rule add iif ${WIREGUARD_INTERFACE_NAME} table ${RANDOM_TABLE_ID} priority 10
+PreUp = ip rule add iif ${WIREGUARD_INTERFACE_NAME} table \${RANDOM_TABLE_ID} priority 10
 PreUp = iptables -I INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
 PreUp = iptables -I INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-PostDown = ip rule del iif ${WIREGUARD_INTERFACE_NAME} table ${RANDOM_TABLE_ID} priority 10
+PostDown = ip rule del iif ${WIREGUARD_INTERFACE_NAME} table \${RANDOM_TABLE_ID} priority 10
 PostDown = iptables -D INPUT -p udp --dport ${WIREGUARD_PORT} -j ACCEPT
 PostDown = iptables -D INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
@@ -165,6 +157,17 @@ export WIREGUARD_INTERFACE_NAME
 export WIREGUARD_PORT
 
 cat << EOFX > ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
+#!/usr/bin/env bash
+
+set -e
+
+# On Ubuntu server when a phone tethers USB connection the newly added interface
+# is not being automatically configured and so we need to run dhclient 
+[[ -x $(which dhclient) ]] && echo "Running dhclient to configure interfaces" && dhclient
+
+echo "Checking internet connection. If this stops here then there was a problem sending ping to 8.8.8.8"
+ping -c 2 -W 2 -q 8.8.8.8
+
 apt update
 # psmisc provides the "killall" tool
 # coreutils provides the "shuf" tool
@@ -186,6 +189,7 @@ EOF
 
 
 cat << EOF > /usr/local/bin/wfh-anywhere-vpn.sh
+#!/usr/bin/env bash
 $(cat ./wfh-anywhere-vpn.sh | envsubst '${WIREGUARD_INTERFACE_NAME},${WIREGUARD_IP},${WIREGUARD_PORT}' | sed 's/\$/\\$/g')
 EOF
 chmod u+x /usr/local/bin/wfh-anywhere-vpn.sh
@@ -211,6 +215,10 @@ chmod u+x ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
 
 generate_every_next_node_install_script() {
 cat << EOFX > ./${OUTPUT_DIR}/${NODE_ID}/generated_wireguard_vpn_install_script.sh
+#!/usr/bin/env bash
+
+set -e
+
 apt update
 # coreutils provides the "shuf" tool
 apt install -y \
@@ -218,10 +226,12 @@ apt install -y \
     iptables \
     coreutils
 
+set +e
+
 get_unique_route_table_id() {
     continue=0
     while [[ \${continue} == 0 ]]; do
-        export RANDOM_TABLE_ID=\$(shuf -i 100-1000 -n 1)
+        export RANDOM_TABLE_ID=\$(shuf -i 10-240 -n 1)
         ip route show table all | grep -q "table \${RANDOM_TABLE_ID}"
         continue=\${?}
     done
@@ -230,7 +240,8 @@ get_unique_route_table_id() {
 get_unique_route_table_id
 
 cat << EOF > /etc/wireguard/${WIREGUARD_INTERFACE_NAME}.conf
-$(cat ${OUTPUT_DIR}/${NODE_ID}/${WIREGUARD_INTERFACE_NAME}.conf | envsubst)
+
+$(cat ${OUTPUT_DIR}/${NODE_ID}/${WIREGUARD_INTERFACE_NAME}.conf)
 EOF
 
 systemctl enable wg-quick@${WIREGUARD_INTERFACE_NAME}
@@ -312,11 +323,12 @@ get_and_save_user_input_if_missing() {
 collect_data_from_user() {
     get_and_save_user_input_if_missing "Enter node count" NODE_COUNT shared 3
     echo "Warning! Make sure the interface name is unique across all nodes you will deploy this VPN. If there is a conflict your existing configuration may be overwritten!"
-    get_and_save_user_input_if_missing "Wireguard interface name" WIREGUARD_INTERFACE_NAME shared "wgvpn0"
+    get_and_save_user_input_if_missing "Wireguard interface name" WIREGUARD_INTERFACE_NAME shared "wfhavpn0"
     get_and_save_user_input_if_missing "Wireguard network CIDR" WIREGUARD_CIDR shared "192.168.200.0/24"
     get_and_save_user_input_if_missing "Wireguard port" WIREGUARD_PORT shared "51820"
-    get_and_save_user_input_if_missing "WiFi hotspot name/SSID" HOTSPOT_NAME shared "RoadWarrior"
-    get_and_save_user_input_if_missing "WiFi hotspot password" HOTSPOT_PASSWORD shared "-"
+    get_and_save_user_input_if_missing "WiFi hotspot name/SSID" HOTSPOT_NAME shared "WFH-Anywhere"
+    random_password=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 13)
+    get_and_save_user_input_if_missing "WiFi hotspot password" HOTSPOT_PASSWORD shared "${random_password}"
 }
 
 wireguard_generate_keys() {

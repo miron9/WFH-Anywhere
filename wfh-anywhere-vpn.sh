@@ -162,16 +162,16 @@ down() {
 
 
 case ${1} in
-    systemd-start)
+    start)
         stop_network_managers
         wg_vpn
         hotspot
         move_ifs_to_netns start
         ;;
-    systemd-stop)
+    stop)
         down
         ;;
-    systemd-restart)
+    restart)
         down
         wg_vpn
         hotspot

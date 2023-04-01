@@ -53,4 +53,4 @@ This script was inspired by those two articles describing how to use Linux netwo
 
 # TODO and FIXME
 
-- in the "prerequisites" function check if dhclient command exists before running it
+- must not allow connection to go out during time when a phone starts sharing via USB and the interface for that USB connection is moved to its dedicated network namespace
