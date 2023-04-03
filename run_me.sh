@@ -163,7 +163,7 @@ set -e
 
 # On Ubuntu server when a phone tethers USB connection the newly added interface
 # is not being automatically configured and so we need to run dhclient 
-[[ -x $(which dhclient) ]] && echo "Running dhclient to configure interfaces" && dhclient
+[[ -x \$(which dhclient) ]] && echo "Running dhclient to configure interfaces" && dhclient
 
 echo "Checking internet connection. If this stops here then there was a problem sending ping to 8.8.8.8"
 ping -c 2 -W 2 -q 8.8.8.8
@@ -189,7 +189,6 @@ EOF
 
 
 cat << EOF > /usr/local/bin/wfh-anywhere-vpn.sh
-#!/usr/bin/env bash
 $(cat ./wfh-anywhere-vpn.sh | envsubst '${WIREGUARD_INTERFACE_NAME},${WIREGUARD_IP},${WIREGUARD_PORT}' | sed 's/\$/\\$/g')
 EOF
 chmod u+x /usr/local/bin/wfh-anywhere-vpn.sh

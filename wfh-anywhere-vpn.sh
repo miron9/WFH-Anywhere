@@ -24,6 +24,12 @@ stop_network_managers() {
         echo "Network Manager is still running"
         exit 1
     fi
+    systemctl is-active systemd-resolved.service
+    if [[ ${?} != 3 ]]
+    then
+        echo "Systemd resolver is still running"
+        exit 1
+    fi
 }
 
 
@@ -56,7 +62,6 @@ ensure_netns_exists() {
 move_ifs_to_netns() { 
     case ${1} in
         start)
-            echo $BASHPID > /tmp/ensure_netns.pid
 
             ensure_netns_exists
 
@@ -83,7 +88,6 @@ move_ifs_to_netns() {
                 ip -n ${NS} link set ${IF} netns 1
             done
             dhcp stop
-            kill $(cat /tmp/ensure_netns.pid)
             ;;
         *)
             echo "missing options for netns"
@@ -117,6 +121,7 @@ hotspot() {
 	ip addr add 10.0.0.1/24 dev wlan0
 	hostapd -B /etc/hostapd/simple.conf
 	sleep 1
+    echo "nameserver 127.0.0.53" > /etc/resolv.conf
 	systemctl restart dnsmasq.service
 
 	# enable local port forward from WiFi to Wireguard
@@ -156,8 +161,15 @@ down() {
     ip -n ${NS} link set eth0 netns 1
     ip netns del ${NS}
 
-    # currently this is disabled is systemd
-    #systemctl restart NetworkManager
+    systemctl stop dnsmasq.service
+
+    systemctl restart NetworkManager.service
+    systemctl restart systemd-networkd.socket
+    systemctl restart systemd-networkd.service
+    systemctl restart systemd-resolved.service
+
+    dhclient -x
+    dhclient
 }
 
 
@@ -169,10 +181,12 @@ case ${1} in
         move_ifs_to_netns start
         ;;
     stop)
+        move_ifs_to_netns stop
         down
         ;;
     restart)
         down
+        stop_network_managers
         wg_vpn
         hotspot
         move_ifs_to_netns start
