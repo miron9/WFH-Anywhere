@@ -163,13 +163,21 @@ down() {
 
     systemctl stop dnsmasq.service
 
-    systemctl restart NetworkManager.service
-    systemctl restart systemd-networkd.socket
-    systemctl restart systemd-networkd.service
-    systemctl restart systemd-resolved.service
+    # This ought to be fine if the script is just stopped with 
+    # systemctl stop ...
+    # but this code also is ran when rebooting or powering down 
+    # and then it messes up the process causing timout with waiting for this
+    # job to stop
+    #systemctl restart NetworkManager.service
+    #systemctl restart systemd-networkd.socket
+    #systemctl restart systemd-networkd.service
+    #systemctl restart systemd-resolved.service
 
     dhclient -x
     dhclient
+
+    echo "If you whish to disable the VPN then disable its service"
+    echo "with systemctl and then reboot."
 }
 
 
