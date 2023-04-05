@@ -1,5 +1,7 @@
 # WFH-Anywhere
 
+![WFH-Anywhere diagram](./WFH-Anywhere-diagram.svg)
+
 ## What is this for?
 
 This repo contains BASH tool that will help you configure a Wireguard VPN tunnel running via any\* number of hops/nodes.
